@@ -46,6 +46,9 @@ export interface ManagedChatConfig {
  * subsets are legal; unknown fields are ignored by contract). */
 export interface ManagedInbound {
   tenantId: string;
+  /** Id of the StandIn connection (binding) this conversation resolved to. Carried VERBATIM so
+   * replies can echo it (see buildReply); old gateways do not send it, so it can be absent. */
+  bindingId?: string;
   conversationId: string;
   activityId: string;
   scope: string;
@@ -110,6 +113,10 @@ export function parseInbound(body: string): { ok: true; message: ManagedInbound 
     ok: true,
     message: {
       tenantId: m.tenantId as string,
+      // Verbatim when present, undefined otherwise: old gateways send nothing here, and that must
+      // keep working. Never synthesized - a plugin talks to ONE binding, so this is a copy, not a
+      // choice.
+      bindingId: typeof m.bindingId === "string" && m.bindingId.length > 0 ? m.bindingId : undefined,
       conversationId: m.conversationId as string,
       activityId: m.activityId as string,
       scope: typeof m.scope === "string" ? m.scope : "personal",
@@ -144,16 +151,21 @@ export class SeenActivities {
   }
 }
 
-/** Build the reply the gateway expects. tenantId/conversationId echo the inbound EXACTLY — the
- * gateway rejects a tenant mismatch (the cross-tenant guard, the load-bearing check of the relay). */
+/** Build the reply the gateway expects. tenantId/conversationId/bindingId echo the inbound EXACTLY -
+ * the gateway rejects a tenant mismatch (the cross-tenant guard, the load-bearing check of the
+ * relay), and when bindingId is present it verifies the HMAC against THAT binding's key and rejects
+ * a reply into a conversation assigned to a different binding (per-binding isolation inside the
+ * tenant). Omitted when the inbound carried none, so old gateways see the exact shape they always
+ * did. */
 export function buildReply(
-  inbound: Pick<ManagedInbound, "tenantId" | "conversationId" | "activityId">,
+  inbound: Pick<ManagedInbound, "tenantId" | "conversationId" | "activityId" | "bindingId">,
   text: string,
   kind: "message" | "typing" | "error" = "message",
 ): Record<string, unknown> {
   return {
     schemaVersion: SCHEMA_VERSION,
     tenantId: inbound.tenantId,
+    ...(inbound.bindingId ? { bindingId: inbound.bindingId } : {}),
     conversationId: inbound.conversationId,
     replyToId: inbound.activityId,
     kind,
@@ -334,6 +346,10 @@ export async function postManagedMessage(opts: {
   chatSecret: string;
   gatewayReplyUrl: string;
   tenantId: string;
+  /** Echo of an INBOUND bindingId when the post answers something that arrived with one. Optional:
+   * an agent-initiated message has no inbound to echo, carries none, and the gateway stamps the
+   * binding it resolves the conversation to - existing callers need not change. */
+  bindingId?: string;
   conversationId: string;
   text: string;
   idempotencyKey?: string;
@@ -345,6 +361,7 @@ export async function postManagedMessage(opts: {
     // kind of thing that breaks against a stricter consumer rather than against the one that wrote it.
     schemaVersion: SCHEMA_VERSION,
     tenantId: opts.tenantId,
+    ...(opts.bindingId ? { bindingId: opts.bindingId } : {}),
     conversationId: opts.conversationId,
     text: opts.text,
     kind: "message",
