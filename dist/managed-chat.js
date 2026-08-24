@@ -42,6 +42,7 @@ export function parseInbound(body) {
         ok: true,
         message: {
             tenantId: m.tenantId,
+            bindingId: typeof m.bindingId === "string" && m.bindingId.length > 0 ? m.bindingId : undefined,
             conversationId: m.conversationId,
             activityId: m.activityId,
             scope: typeof m.scope === "string" ? m.scope : "personal",
@@ -75,6 +76,7 @@ export function buildReply(inbound, text, kind = "message") {
     return {
         schemaVersion: SCHEMA_VERSION,
         tenantId: inbound.tenantId,
+        ...(inbound.bindingId ? { bindingId: inbound.bindingId } : {}),
         conversationId: inbound.conversationId,
         replyToId: inbound.activityId,
         kind,
@@ -190,6 +192,7 @@ export async function postManagedMessage(opts) {
     const body = JSON.stringify({
         schemaVersion: SCHEMA_VERSION,
         tenantId: opts.tenantId,
+        ...(opts.bindingId ? { bindingId: opts.bindingId } : {}),
         conversationId: opts.conversationId,
         text: opts.text,
         kind: "message",

@@ -78,6 +78,21 @@ describe("inbound parsing", () => {
     }
   });
 
+  it("carries bindingId VERBATIM when present, undefined when absent or malformed", () => {
+    // Verbatim: the reply echoes it, so any normalization here would break the echo.
+    const withIt = parseInbound(valid);
+    expect(withIt.ok && withIt.message.bindingId).toBe("b1");
+    // Old gateways send nothing, and that must keep working.
+    for (const bindingId of [undefined, null, "", 42, { id: "b1" }]) {
+      const m = JSON.parse(valid) as Record<string, unknown>;
+      if (bindingId === undefined) delete m.bindingId;
+      else m.bindingId = bindingId;
+      const r = parseInbound(JSON.stringify(m));
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.message.bindingId).toBeUndefined();
+    }
+  });
+
   it("requires the routing keys and rejects malformed bodies", () => {
     expect(parseInbound("not json").ok).toBe(false);
     expect(parseInbound("[]").ok).toBe(false);
@@ -120,6 +135,16 @@ describe("reply building", () => {
     expect(typing.kind).toBe("typing");
     expect("text" in typing).toBe(false);
     expect(typing.idempotencyKey).toBe("a1:typing");
+  });
+
+  it("echoes the inbound bindingId when present (per-binding isolation inside the tenant)", () => {
+    const reply = buildReply({ ...inbound, bindingId: "b1" }, "answer");
+    expect(reply.bindingId).toBe("b1");
+  });
+
+  it("omits bindingId when the inbound carried none (old-gateway shape unchanged)", () => {
+    const reply = buildReply(inbound, "answer");
+    expect("bindingId" in reply).toBe(false);
   });
 });
 
@@ -280,6 +305,28 @@ describe("attachment image fetch (4.7 agent-side leg)", () => {
     // Signed with the binding's secret over the exact bytes sent - the gateway verifies per binding.
     const expected = computeBridgeSignature(KAT_SECRET, sent[0].headers["x-standin-timestamp"], JSON.stringify(sent[0].body));
     expect(sent[0].headers["x-standin-signature"]).toBe(expected);
+    // No bindingId was given (agent-initiated post): none goes on the wire; the gateway stamps the
+    // binding it resolves the conversation to.
+    expect("bindingId" in sent[0].body).toBe(false);
+  });
+
+  it("includes bindingId on the wire when the caller provides one", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const ok = await postManagedMessage({
+      chatSecret: KAT_SECRET,
+      gatewayReplyUrl: "https://gateway.test/api/chat/reply",
+      tenantId: "t1",
+      bindingId: "b1",
+      conversationId: "c1",
+      text: "x",
+      fetchFn,
+    });
+    expect(ok).toBe(true);
+    expect(sent[0].bindingId).toBe("b1");
   });
 
   it("reports a failed in-call post instead of throwing into the call", async () => {
@@ -450,7 +497,7 @@ describe("the server end to end", () => {
   }
 
   const inbound = JSON.stringify({
-    tenantId: "t1", conversationId: "c1", activityId: "a-e2e", scope: "personal",
+    tenantId: "t1", bindingId: "bind-e2e", conversationId: "c1", activityId: "a-e2e", scope: "personal",
     sender: { displayName: "Alaa" }, text: "hi",
   });
 
@@ -464,6 +511,8 @@ describe("the server end to end", () => {
     const reply = replies[1];
     expect(reply.url).toBe("https://gateway.test/api/chat/reply");
     expect(reply.body.tenantId).toBe("t1");
+    // The inbound bindingId is echoed verbatim, all the way through the server path.
+    expect(reply.body.bindingId).toBe("bind-e2e");
     expect(reply.body.text).toBe("the answer");
     // The reply is signed with the same chat key, verifiable by the gateway's construction.
     expect(verifyBridge(KAT_SECRET, reply.ts, JSON.stringify(reply.body), reply.sig, Number(reply.ts))).toBe(true);
