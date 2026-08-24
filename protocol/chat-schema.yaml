@@ -278,6 +278,11 @@ types:
       - name: conversationId
         type: string
         doc: "The conversation to send into; echo the inbound value."
+      - name: bindingId
+        type: string
+        optional: true
+        nullable: true
+        doc: "Id of the StandIn connection (binding) this reply is FROM: echo the inbound bindingId of the message being answered. OPTIONAL today, REQUIRED once every agent echoes it (MANAGED-BOT-TIER.md step 11, slice 5b). With N bindings per tenant (D1, revision 10) tenantId alone no longer identifies the sender, so this is the second half of the cross-tenant guard above, inside the tenant: when present, the gateway verifies the reply with THAT binding's chat key and REJECTS it for a conversation assigned to a different binding (one greppable ISOLATION line); when absent, the gateway verifies against the conversation's recorded binding, else the tenant's default, which today is the tenant's one connection, so nothing changes for an agent that does not send it yet. Additive v1 field: a gateway that predates it ignores it."
       - name: replyToId
         type: string
         optional: true
